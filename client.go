@@ -7,7 +7,7 @@ import (
 	"net/http"
 )
 
-func getUrl(url string) ([]byte, error) {
+func fetchUrl(url string) ([]byte, error) {
 	fmt.Printf("Fetching: '%s'\n", url)
 
 	response, err := http.Get(url)
