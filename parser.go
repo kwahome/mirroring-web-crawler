@@ -1,4 +1,4 @@
-package crawler
+package main
 
 import (
 	"fmt"
@@ -6,31 +6,45 @@ import (
 	"strings"
 )
 
-const linkPattern = `="(.*?)"`
+const linkPattern = `%s="(.*?)"`
 
+// we can add more resource linking attributes such as src
 var htmlAttributesToParse = []string{"href", "src"}
+
+var unwantedPrefixes = []string{"font-family:", "#popup:", "'"}
 
 func findChildrenLinks(data []byte, baseUrl string) ([]string, error) {
 	links := make([]string, 0)
 
 	for _, attribute := range htmlAttributesToParse {
 
-		matches := regexp.MustCompile(attribute+linkPattern).FindAllString(string(data), -1)
+		regexPattern := fmt.Sprintf(linkPattern, attribute)
+
+		matches := regexp.MustCompile(regexPattern).FindAllString(string(data), -1)
 
 		for _, match := range matches {
-			link := strings.TrimPrefix(match, attribute+`="`)[:(len(match)-len(attribute+`="`))-1]
+			// clean the linked url
+			cleanedLink := strings.TrimPrefix(match, attribute+`="`)[:(len(match)-len(attribute+`="`))-1]
 
-			// if the link is relative, make it an absolute url
-			if strings.HasPrefix(link, "/") {
-				link = baseUrl + link
+			for _, invalidPrefix := range unwantedPrefixes {
+				if strings.HasPrefix(cleanedLink, invalidPrefix) {
+					continue
+				}
+			}
+
+			// make the cleanedLink an absolute url if relative
+			if strings.HasPrefix(cleanedLink, "/") {
+				cleanedLink = strings.TrimSuffix(baseUrl, "/") + cleanedLink
 			}
 
 			// valid links have the baseUrl as their prefix
-			if strings.HasPrefix(link, baseUrl) {
-				fmt.Printf("Found a child url: %s\n", link)
-
-				links = append(links, link)
+			if !strings.HasPrefix(cleanedLink, baseUrl) {
+				continue
 			}
+
+			fmt.Printf("extracted valid child url: '%s'\n", cleanedLink)
+
+			links = append(links, cleanedLink)
 		}
 	}
 

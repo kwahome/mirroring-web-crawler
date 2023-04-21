@@ -1,4 +1,4 @@
-package crawler
+package main
 
 import (
 	"fmt"
@@ -8,11 +8,11 @@ import (
 )
 
 func fetchUrl(url string) ([]byte, error) {
-	fmt.Printf("Fetching: '%s'\n", url)
+	fmt.Printf("fetching '%s'\n", url)
 
 	response, err := http.Get(url)
 	if err != nil {
-		fmt.Printf("An error has occurred: '%v'\n", err)
+		fmt.Printf("an error has occurred: '%v'\n", err)
 
 		return nil, err
 	}
@@ -20,14 +20,14 @@ func fetchUrl(url string) ([]byte, error) {
 	defer closeIOReader(response.Body)
 
 	if response.StatusCode != http.StatusOK {
-		fmt.Printf("The request to fetch '%s' returned a non-success status '%s'\n", url, response.StatusCode)
+		fmt.Printf("the request to fetch '%s' returned a non-success status '%v'\n", url, response.StatusCode)
 
 		return nil, err
 	}
 
 	content, err := io.ReadAll(response.Body)
 	if err != nil {
-		fmt.Printf("An error has occurred: '%v'\n", err)
+		fmt.Printf("an error has occurred: '%v'\n", err)
 
 		return nil, err
 	}

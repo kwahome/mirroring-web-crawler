@@ -1,4 +1,4 @@
-package crawler
+package main
 
 import (
 	"fmt"
@@ -8,7 +8,7 @@ import (
 )
 
 func writeToFile(data []byte, filePath string) error {
-	fmt.Printf("Writing to: '%s'\n", filePath)
+	fmt.Printf("writing to '%s'\n", filePath)
 
 	err := os.MkdirAll(filepath.Dir(filePath), os.ModePerm)
 	if err != nil {
