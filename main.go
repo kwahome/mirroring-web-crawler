@@ -22,29 +22,19 @@ var (
 	interval    int64
 )
 
-// variables for goroutine synchronization
-// and communication through shared memory
+// variables for goroutine synchronization and communication through shared memory
 var (
-	crawledState map[string]bool
+	// using a map[string]struct{} as a set is more efficient
+	// because an empty struct{} occupies 0 bytes in memory
+	queuedLinks  map[string]struct{}
+	crawledLinks map[string]struct{}
 	mutexLock    *sync.RWMutex
 	semaphores   *semaphore.Weighted
 )
 
 func main() {
-	flag.StringVar(&target, "url", "", "target url to crawl")
-	flag.StringVar(&directory, "dir", "", "target directory to save crawledState files")
-	flag.BoolVar(&overwrite, "overwrite", false, "overwrite download of files")
-	flag.Int64Var(&concurrency, "concurrency", 10, "number of concurrent crawlers")
-	flag.Int64Var(&interval, "interval", 1000, "the number of milliseconds to wait between crawls")
-	flag.Parse()
-
-	if len(target) == 0 {
-		log.Fatal("a target url has not been defined with the -url option")
-	}
-
-	if len(directory) == 0 {
-		log.Fatal("a destination directory has not been defined with the -dir option")
-	}
+	// parse command line arguments
+	parseArguments()
 
 	// process interrupt signals
 	quit := make(chan os.Signal, 1)
@@ -56,8 +46,7 @@ func main() {
 
 	ticker := time.NewTicker(time.Duration(interval) * time.Millisecond)
 
-	// mutual exclusion lock to safeguard
-	// and synchronize critical sections
+	// mutual exclusion lock to safeguard and synchronize critical sections
 	mutexLock = &sync.RWMutex{}
 
 	// counting semaphores to control the number of active threads.
@@ -66,8 +55,10 @@ func main() {
 	// wait group to synchronize waiting on threads
 	waitGroup := sync.WaitGroup{}
 
-	crawledState = make(map[string]bool)
-	crawledState[target] = false
+	crawledLinks = make(map[string]struct{})
+
+	queuedLinks = make(map[string]struct{})
+	queuedLinks[target] = struct{}{}
 
 	for {
 		select {
@@ -78,7 +69,7 @@ func main() {
 			return
 		case <-ticker.C:
 
-			if len(crawledState) == 0 {
+			if len(queuedLinks) == 0 {
 				fmt.Printf("\ncrawler has completed\n")
 				return
 			}
@@ -86,17 +77,18 @@ func main() {
 			// get the next URL to crawl
 			var link string
 			mutexLock.RLock()
-			for url, crawled := range crawledState {
-				if crawled {
-					fmt.Printf("skipping the link '%s' which has already been crawled\n", url)
+			for queuedLink := range queuedLinks {
+				if _, crawled := crawledLinks[queuedLink]; crawled {
+					fmt.Printf("skipping the link '%s' which has already been crawled\n", queuedLink)
 
-					// remove the crawled link from the state
-					evict(crawledState, link, mutexLock)
+					// remove the crawled link from the queued set and add it to the
+					// crawled set within a synchronized operation for thread safety
+					evict(queuedLinks, crawledLinks, link, mutexLock)
 
 					continue
 				}
 
-				link = url
+				link = queuedLink
 			}
 			mutexLock.RUnlock()
 
@@ -114,17 +106,14 @@ func main() {
 				}
 
 				defer func() {
-					// remove the crawled link from the state
-					evict(crawledState, link, mutexLock)
+					// remove the crawledLinks link from the state
+					evict(queuedLinks, crawledLinks, link, mutexLock)
 
 					semaphores.Release(1)
 				}()
 
-				// set this link as crawledState so that it is
-				// not picked up by another thread
-				mutexLock.Lock()
-				crawledState[link] = true
-				mutexLock.Unlock()
+				// set this link as crawledLinks so that it is not duplicated
+				markAsCrawled(crawledLinks, link, mutexLock)
 
 				childrenLinks, err := crawl(link, directory, overwrite, target)
 				if err != nil {
@@ -134,10 +123,8 @@ func main() {
 				}
 
 				for _, childLink := range childrenLinks {
-					// add child link to state and set its status to false
-					mutexLock.Lock()
-					crawledState[childLink] = false
-					mutexLock.Unlock()
+					// add child link to queued set
+					queueLinkToCrawl(queuedLinks, crawledLinks, childLink, mutexLock)
 				}
 
 			}(ctx, link)
@@ -147,9 +134,56 @@ func main() {
 	}
 }
 
+func parseArguments() {
+	flag.StringVar(&target, "url", "", "target url to crawl")
+	flag.StringVar(&directory, "dir", "", "target directory to save crawled files")
+	flag.BoolVar(&overwrite, "overwrite", false, "overwrite download of files")
+	flag.Int64Var(&concurrency, "concurrency", 10, "number of concurrent crawlers")
+	flag.Int64Var(&interval, "interval", 1000, "the number of milliseconds to wait between crawls")
+	flag.Parse()
+
+	if len(target) == 0 {
+		log.Fatal("a target url has not been defined with the -url option")
+	}
+
+	if len(directory) == 0 {
+		log.Fatal("a destination directory has not been defined with the -dir option")
+	}
+}
+
 // evict removes a link from tracking state
-func evict(state map[string]bool, link string, lock *sync.RWMutex) {
+func evict(queue map[string]struct{}, crawled map[string]struct{}, link string, lock *sync.RWMutex) {
 	lock.Lock()
-	delete(state, link)
+
+	// delete from active set
+	delete(queue, link)
+
+	// add to crawled set which helps avoid unnecessary
+	// adding of crawled links to the queuedLinks set
+	crawled[link] = struct{}{}
+
 	lock.Unlock()
+}
+
+// markAsCrawled sets a link as crawled so that it is not duplicated in other goroutines
+func markAsCrawled(crawled map[string]struct{}, link string, lock *sync.RWMutex) {
+	lock.Lock()
+	crawled[link] = struct{}{}
+	lock.Unlock()
+}
+
+// queueLinkToCrawl adds a link to the queued set if not already crawled
+func queueLinkToCrawl(queue map[string]struct{}, crawled map[string]struct{}, link string, lock *sync.RWMutex) {
+	// we first check whether the link is already crawled
+	var isCrawled bool
+	mutexLock.RLock()
+	_, isCrawled = crawled[link]
+	mutexLock.RUnlock()
+
+	// if it is not, we queue it
+	if !isCrawled {
+		lock.Lock()
+		queue[link] = struct{}{}
+		lock.Unlock()
+	}
 }
