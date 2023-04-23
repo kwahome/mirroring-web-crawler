@@ -16,6 +16,10 @@ proceed to any valid links in this page.
 - Configurable concurrent processing
 - Support interruption and resume capabilities
 
+## Enhancements
+- Use a goroutine pool backed by a queue which provides a better concurrency model and usage of resources.
+- Add support for resuming partially downloaded files which can happen when the crawler is interrupted
+
 ## Code
 
 ### Compile:
